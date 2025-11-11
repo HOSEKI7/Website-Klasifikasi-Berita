@@ -345,3 +345,11 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Jalankan server hanya jika file ini dieksekusi langsung
+if __name__ == "__main__":
+    import uvicorn
+    # Render akan memberikan PORT lewat environment variable
+    port = int(os.environ.get("PORT", 10000))
+    # Jalankan server FastAPI pada host 0.0.0.0 agar bisa diakses publik
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
