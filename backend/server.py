@@ -18,6 +18,26 @@ from sklearn.neighbors import KNeighborsClassifier
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
+# Import library FastAPI untuk CORS
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+# Create FastAPI app instance
+app = FastAPI()
+
+# Get origins from environment variable
+origins = os.getenv("CORS_ORIGIN", "").split(",")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Konfigurasi dasar
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -349,16 +369,8 @@ logging.basicConfig(
 # Jalankan server hanya jika file ini dieksekusi langsung
 if __name__ == "__main__":
     import uvicorn
-    import sys
+    import os
 
-    # Ambil port dari argumen (Render akan kirim lewat bash)
-    port = 10000  # default fallback
-    if "--port" in sys.argv:
-        try:
-            port = int(sys.argv[sys.argv.index("--port") + 1])
-        except Exception:
-            pass
-    else:
-        port = int(os.environ.get("PORT", 10000))
-
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run("server:app", host="0.0.0.0", port=port)
+

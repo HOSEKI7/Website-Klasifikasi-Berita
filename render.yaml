@@ -11,15 +11,18 @@ services:
     env: python
     plan: free
     rootDir: backend
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python server.py"
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
+    autoDeploy: true
     envVars:
       - key: MONGO_URL
-        sync: false # nilai rahasia diatur langsung di dashboard Render
+        sync: false
       - key: DB_NAME
-        value: klasifikasi_berita
-      - key: CORS_ORIGINS
-        value: https://website-klasifikasi-berita.vercel.app
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+
+        # value: https://news-classifier-frontend-ten.vercel.app/
 # =========================================================
 # Optional: Documentation only
 # The frontend React app is hosted separately on Vercel.
