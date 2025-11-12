@@ -1,34 +1,33 @@
+from fastapi import FastAPI, APIRouter, HTTPException
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
-import threading
-import uuid
-import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List
+import uuid
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
-from fastapi import FastAPI, APIRouter, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, ConfigDict
+import asyncio
+
+# === Machine Learning Libraries ===
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import KNeighborsClassifier
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
-# ========== Konfigurasi dasar ==========
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# === Konfigurasi dasar ===
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
 
-# ========== Inisialisasi Aplikasi ==========
+# === FastAPI App ===
 app = FastAPI(title="News Classifier API")
-api_router = APIRouter(prefix="/api")
 
-# ========== CORS ==========
-origins = os.getenv("CORS_ORIGIN", "http://localhost:3000").split(",")
+# === Konfigurasi CORS ===
+origins = os.getenv("CORS_ORIGIN", "").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -37,24 +36,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========== Koneksi ke MongoDB ==========
-mongo_url = os.getenv("MONGO_URL")
-db_name = os.getenv("DB_NAME", "klasifikasi_berita")
+# === Koneksi MongoDB ===
+mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
+db = client[os.environ["DB_NAME"]]
 
-# ========== Preprocessing tools ==========
-stemmer_factory = StemmerFactory()
-stopword_factory = StopWordRemoverFactory()
-stemmer = stemmer_factory.create_stemmer()
-stopword_remover = stopword_factory.create_stop_word_remover()
+# === Router ===
+api_router = APIRouter(prefix="/api")
 
-# ========== Variabel Model ==========
+# === Preprocessing tools ===
+stemmer = StemmerFactory().create_stemmer()
+stopword_remover = StopWordRemoverFactory().create_stop_word_remover()
+
+# === Model global ===
 vectorizer = None
 knn_classifier = None
 categories = ["Ekonomi", "Hiburan", "Olahraga", "Politik", "Teknologi"]
 
-# ========== Pydantic Models ==========
+# === Data Models ===
 class News(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -72,13 +71,22 @@ class CategoryStats(BaseModel):
     kategori: str
     jumlah: int
 
-# ========== Helper Functions ==========
+
+# === Helper Functions ===
 def simplify_category(cat: str) -> str:
     cat = str(cat)
-    for key in categories:
-        if key in cat:
-            return key
-    return "Lainnya"
+    if "Politik" in cat:
+        return "Politik"
+    elif "Olahraga" in cat:
+        return "Olahraga"
+    elif "Ekonomi" in cat:
+        return "Ekonomi"
+    elif "Hiburan" in cat:
+        return "Hiburan"
+    elif "Teknologi" in cat:
+        return "Teknologi"
+    else:
+        return "Lainnya"
 
 def preprocess_text(text: str) -> str:
     text = text.lower()
@@ -86,24 +94,25 @@ def preprocess_text(text: str) -> str:
     text = stemmer.stem(text)
     return text
 
-# ========== Model Training & Prediction ==========
+
+# === Model Training ===
 async def train_model():
     global vectorizer, knn_classifier
-    logging.info("Memulai pelatihan model...")
 
+    logging.info("Memulai pelatihan model...")
     all_news = await db.news.find({}, {"_id": 0}).to_list(10000)
-    if len(all_news) < 5:
-        logging.warning("Data kurang dari 5, model mungkin tidak akurat.")
-        if len(all_news) == 0:
-            logging.error("Tidak ada data. Model tidak bisa dilatih.")
-            return
+
+    if len(all_news) == 0:
+        logging.warning("Tidak ada data untuk melatih model.")
+        return
 
     texts = []
     labels = []
-    for item in all_news:
-        combined = preprocess_text(item["judul"] + " " + item["isi"])
-        texts.append(combined)
-        labels.append(item["kategori"])
+    for news_item in all_news:
+        combined_text = news_item["judul"] + " " + news_item["isi"]
+        processed_text = preprocess_text(combined_text)
+        texts.append(processed_text)
+        labels.append(news_item["kategori"])
 
     vectorizer = TfidfVectorizer(max_features=1000, ngram_range=(1, 2))
     X = vectorizer.fit_transform(texts)
@@ -111,20 +120,28 @@ async def train_model():
     n_neighbors = min(5, len(texts))
     knn_classifier = KNeighborsClassifier(n_neighbors=n_neighbors, weights="distance")
     knn_classifier.fit(X, labels)
+
     logging.info(f"Model berhasil dilatih dengan {len(texts)} data.")
 
-def classify_news(judul: str, isi: str):
+
+def classify_news(judul: str, isi: str) -> tuple:
     if vectorizer is None or knn_classifier is None:
-        logging.warning("Model belum dilatih, klasifikasi dibatalkan.")
+        logging.warning("Model belum dilatih.")
         return "Unknown", 0.0
 
-    processed = preprocess_text(judul + " " + isi)
-    X_new = vectorizer.transform([processed])
-    probs = knn_classifier.predict_proba(X_new)[0]
-    idx = np.argmax(probs)
-    return knn_classifier.classes_[idx], float(probs[idx])
+    combined_text = judul + " " + isi
+    processed_text = preprocess_text(combined_text)
+    X_new = vectorizer.transform([processed_text])
+    probabilities = knn_classifier.predict_proba(X_new)[0]
 
-# ========== FastAPI Startup & Shutdown ==========
+    max_prob_index = np.argmax(probabilities)
+    predicted_category = knn_classifier.classes_[max_prob_index]
+    confidence = float(np.max(probabilities))
+
+    return predicted_category, confidence
+
+
+# === Startup Event ===
 @app.on_event("startup")
 async def startup_event():
     logging.info("Server startup...")
@@ -141,14 +158,17 @@ async def startup_event():
 
             initial_docs = []
             for cat in categories:
-                sample_count = min(10, len(df[df["kategori"] == cat]))
-                if sample_count > 0:
-                    samples = df[df["kategori"] == cat].sample(n=sample_count, random_state=42)
-                    for _, row in samples.iterrows():
-                        news = News(judul=row["judul"], isi=row["isi"], kategori=row["kategori"], confidence_score=1.0)
-                        doc = news.model_dump()
-                        doc["created_at"] = doc["created_at"].isoformat()
-                        initial_docs.append(doc)
+                samples = df[df["kategori"] == cat].sample(n=min(10, len(df[df["kategori"] == cat])), random_state=42)
+                for _, row in samples.iterrows():
+                    news = News(
+                        judul=row["judul"],
+                        isi=row["isi"],
+                        kategori=row["kategori"],
+                        confidence_score=1.0
+                    )
+                    doc = news.model_dump()
+                    doc["created_at"] = doc["created_at"].isoformat()
+                    initial_docs.append(doc)
             if initial_docs:
                 await db.news.insert_many(initial_docs)
                 logging.info(f"Berhasil menambahkan {len(initial_docs)} data awal.")
@@ -157,28 +177,27 @@ async def startup_event():
     else:
         logging.info(f"Database sudah berisi {count} data.")
 
-    # Jalankan pelatihan model di background thread agar port cepat terbuka
-    def background_training():
+    # ✅ Jalankan training di loop yang sama, bukan di thread lain
+    async def async_background_training():
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(train_model())
-            loop.close()
-            logging.info("Pelatihan model selesai (background).")
+            await train_model()
+            logging.info("Pelatihan model selesai (background task).")
         except Exception as e:
-            logging.error(f"Error di background_training: {e}")
+            logging.error(f"Error di background training: {e}")
 
-    threading.Thread(target=background_training, daemon=True).start()
+    asyncio.create_task(async_background_training())
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
     logging.info("Koneksi MongoDB ditutup.")
 
-# ========== API ROUTES ==========
+
+# === API Endpoints ===
 @api_router.get("/")
-async def api_root():
-    return {"message": "News Classifier API aktif!"}
+async def root():
+    return {"message": "News Classifier API"}
 
 @api_router.post("/news", response_model=News)
 async def create_news(input: NewsCreate):
@@ -188,26 +207,17 @@ async def create_news(input: NewsCreate):
     doc["created_at"] = doc["created_at"].isoformat()
     await db.news.insert_one(doc)
 
-    # Pelatihan ulang di background agar tidak blokir request
-    def retrain_background():
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(train_model())
-            loop.close()
-            logging.info("Pelatihan ulang model selesai (background).")
-        except Exception as e:
-            logging.error(f"Error retraining background: {e}")
+    # Latih ulang secara async agar tidak blokir request
+    asyncio.create_task(train_model())
 
-    threading.Thread(target=retrain_background, daemon=True).start()
     return news_obj
 
 @api_router.get("/news", response_model=List[News])
 async def get_all_news():
     news_list = await db.news.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    for item in news_list:
-        if isinstance(item["created_at"], str):
-            item["created_at"] = datetime.fromisoformat(item["created_at"])
+    for news_item in news_list:
+        if isinstance(news_item["created_at"], str):
+            news_item["created_at"] = datetime.fromisoformat(news_item["created_at"])
     return news_list
 
 @api_router.get("/news/{kategori}", response_model=List[News])
@@ -215,43 +225,32 @@ async def get_news_by_category(kategori: str):
     if kategori not in categories:
         raise HTTPException(status_code=404, detail="Kategori tidak ditemukan")
     news_list = await db.news.find({"kategori": kategori}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    for item in news_list:
-        if isinstance(item["created_at"], str):
-            item["created_at"] = datetime.fromisoformat(item["created_at"])
+    for news_item in news_list:
+        if isinstance(news_item["created_at"], str):
+            news_item["created_at"] = datetime.fromisoformat(news_item["created_at"])
     return news_list
 
 @api_router.get("/categories/stats", response_model=List[CategoryStats])
 async def get_category_stats():
     stats = []
-    for cat in categories:
-        count = await db.news.count_documents({"kategori": cat})
-        stats.append(CategoryStats(kategori=cat, jumlah=count))
+    for kategori in categories:
+        count = await db.news.count_documents({"kategori": kategori})
+        stats.append(CategoryStats(kategori=kategori, jumlah=count))
     return stats
 
 @api_router.post("/train")
 async def retrain_model_manual():
-    def background_train():
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(train_model())
-            loop.close()
-            logging.info("Pelatihan model manual selesai (background).")
-        except Exception as e:
-            logging.error(f"Error retrain manual: {e}")
+    asyncio.create_task(train_model())
+    return {"message": "Model retrained in background"}
 
-    threading.Thread(target=background_train, daemon=True).start()
-    return {"message": "Pelatihan model dimulai di background"}
 
-# ========== Root route untuk health check ==========
-@app.get("/")
-async def home():
-    return {"message": "Backend News Classifier API is live!"}
-
-# ========== Register Router ==========
+# === Router ===
 app.include_router(api_router)
 
-# ========== Main Entry Point ==========
+# === Logging ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# === Entry Point ===
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
