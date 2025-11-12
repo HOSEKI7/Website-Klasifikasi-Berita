@@ -1,8 +1,8 @@
 import os
-import asyncio
 import logging
 import threading
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -20,11 +20,12 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 # ========== Konfigurasi dasar ==========
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 # ========== Inisialisasi Aplikasi ==========
 app = FastAPI(title="News Classifier API")
+api_router = APIRouter(prefix="/api")
 
 # ========== CORS ==========
 origins = os.getenv("CORS_ORIGIN", "http://localhost:3000").split(",")
@@ -158,9 +159,14 @@ async def startup_event():
 
     # Jalankan pelatihan model di background thread agar port cepat terbuka
     def background_training():
-        import asyncio
-        asyncio.run(train_model())
-        logging.info("Pelatihan model selesai (background).")
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(train_model())
+            loop.close()
+            logging.info("Pelatihan model selesai (background).")
+        except Exception as e:
+            logging.error(f"Error di background_training: {e}")
 
     threading.Thread(target=background_training, daemon=True).start()
 
@@ -170,23 +176,33 @@ async def shutdown_db_client():
     logging.info("Koneksi MongoDB ditutup.")
 
 # ========== API ROUTES ==========
-router = APIRouter(prefix="/api")
-
-@router.get("/")
-async def root():
+@api_router.get("/")
+async def api_root():
     return {"message": "News Classifier API aktif!"}
 
-@router.post("/news", response_model=News)
+@api_router.post("/news", response_model=News)
 async def create_news(input: NewsCreate):
     kategori, confidence = classify_news(input.judul, input.isi)
     news_obj = News(judul=input.judul, isi=input.isi, kategori=kategori, confidence_score=confidence)
     doc = news_obj.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.news.insert_one(doc)
-    threading.Thread(target=lambda: asyncio.run(train_model()), daemon=True).start()
+
+    # Pelatihan ulang di background agar tidak blokir request
+    def retrain_background():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(train_model())
+            loop.close()
+            logging.info("Pelatihan ulang model selesai (background).")
+        except Exception as e:
+            logging.error(f"Error retraining background: {e}")
+
+    threading.Thread(target=retrain_background, daemon=True).start()
     return news_obj
 
-@router.get("/news", response_model=List[News])
+@api_router.get("/news", response_model=List[News])
 async def get_all_news():
     news_list = await db.news.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     for item in news_list:
@@ -194,7 +210,7 @@ async def get_all_news():
             item["created_at"] = datetime.fromisoformat(item["created_at"])
     return news_list
 
-@router.get("/news/{kategori}", response_model=List[News])
+@api_router.get("/news/{kategori}", response_model=List[News])
 async def get_news_by_category(kategori: str):
     if kategori not in categories:
         raise HTTPException(status_code=404, detail="Kategori tidak ditemukan")
@@ -204,7 +220,7 @@ async def get_news_by_category(kategori: str):
             item["created_at"] = datetime.fromisoformat(item["created_at"])
     return news_list
 
-@router.get("/categories/stats", response_model=List[CategoryStats])
+@api_router.get("/categories/stats", response_model=List[CategoryStats])
 async def get_category_stats():
     stats = []
     for cat in categories:
@@ -212,13 +228,28 @@ async def get_category_stats():
         stats.append(CategoryStats(kategori=cat, jumlah=count))
     return stats
 
-@router.post("/train")
+@api_router.post("/train")
 async def retrain_model_manual():
-    threading.Thread(target=lambda: asyncio.run(train_model()), daemon=True).start()
+    def background_train():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(train_model())
+            loop.close()
+            logging.info("Pelatihan model manual selesai (background).")
+        except Exception as e:
+            logging.error(f"Error retrain manual: {e}")
+
+    threading.Thread(target=background_train, daemon=True).start()
     return {"message": "Pelatihan model dimulai di background"}
 
+# ========== Root route untuk health check ==========
+@app.get("/")
+async def home():
+    return {"message": "Backend News Classifier API is live!"}
+
 # ========== Register Router ==========
-app.include_router(router)
+app.include_router(api_router)
 
 # ========== Main Entry Point ==========
 if __name__ == "__main__":
