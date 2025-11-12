@@ -349,7 +349,16 @@ logging.basicConfig(
 # Jalankan server hanya jika file ini dieksekusi langsung
 if __name__ == "__main__":
     import uvicorn
-    # Render akan memberikan PORT lewat environment variable
-    port = int(os.environ.get("PORT", 10000))
-    # Jalankan server FastAPI pada host 0.0.0.0 agar bisa diakses publik
+    import sys
+
+    # Ambil port dari argumen (Render akan kirim lewat bash)
+    port = 10000  # default fallback
+    if "--port" in sys.argv:
+        try:
+            port = int(sys.argv[sys.argv.index("--port") + 1])
+        except Exception:
+            pass
+    else:
+        port = int(os.environ.get("PORT", 10000))
+
     uvicorn.run("server:app", host="0.0.0.0", port=port)
