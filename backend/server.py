@@ -243,6 +243,9 @@ async def retrain_model_manual():
     asyncio.create_task(train_model())
     return {"message": "Model retrained in background"}
 
+# === Router ===
+app.include_router(api_router)
+
 @app.get("/", tags=["Health"])
 async def health_check():
     """
@@ -251,11 +254,11 @@ async def health_check():
     """
     return {"status": "ok", "message": "Backend News Classifier API is running!"}
 
-# === Router ===
-app.include_router(api_router)
-
 # === Logging ===
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 # === Entry Point ===
 if __name__ == "__main__":
