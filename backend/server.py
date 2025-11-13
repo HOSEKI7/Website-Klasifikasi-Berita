@@ -243,6 +243,13 @@ async def retrain_model_manual():
     asyncio.create_task(train_model())
     return {"message": "Model retrained in background"}
 
+@app.get("/", tags=["Health"])
+async def health_check():
+    """
+    Endpoint dasar untuk memastikan server hidup.
+    Render menggunakan ini untuk health check otomatis.
+    """
+    return {"status": "ok", "message": "Backend News Classifier API is running!"}
 
 # === Router ===
 app.include_router(api_router)
