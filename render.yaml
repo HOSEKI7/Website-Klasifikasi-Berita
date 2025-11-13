@@ -12,7 +12,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
-    startCommand: "bash -c 'export PORT=${PORT:-10000} && exec uvicorn server:app --host 0.0.0.0 --port $PORT'"
+    startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: "/"
     autoDeploy: true
     envVars:

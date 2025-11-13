@@ -246,11 +246,11 @@ async def retrain_model_manual():
 # === Router ===
 app.include_router(api_router)
 
-@app.get("/", tags=["Health"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["Health"])
 async def health_check():
     """
     Endpoint dasar untuk memastikan server hidup.
-    Render menggunakan ini untuk health check otomatis.
+    Render dan health checker akan mengirim HEAD / untuk cek status.
     """
     return {"status": "ok", "message": "Backend News Classifier API is running!"}
 
